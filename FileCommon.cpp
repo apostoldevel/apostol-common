@@ -43,7 +43,6 @@ namespace Apostol {
 
     namespace Module {
 
-
         //--------------------------------------------------------------------------------------------------------------
 
         //-- CFileThread -----------------------------------------------------------------------------------------------
@@ -146,12 +145,25 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
+        CFileHandler::~CFileHandler() {
+            SetConnection(nullptr);
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
         void CFileHandler::SetConnection(CHTTPServerConnection *AConnection) {
             if (m_pConnection != AConnection) {
                 if (AConnection != nullptr) {
-                    AConnection->TimeOutInterval(30 * 1000);
-                    AConnection->UpdateTimeOut(Now());
+                    AConnection->Binding(this);
+                    AConnection->TimeOut(INFINITE);
+                } else {
+                    if (m_pConnection != nullptr) {
+                        m_pConnection->TimeOutInterval(5 * 1000);
+                        m_pConnection->UpdateTimeOut(Now());
+                        m_pConnection->Binding(nullptr);
+                        m_pConnection->CloseConnection(true);
+                    }
                 }
+
                 m_pConnection = AConnection;
             }
         }
@@ -273,19 +285,19 @@ namespace Apostol {
                 sFileExt = ExtractFileExt(szBuffer, FileName.c_str());
 
 #if (APOSTOL_USE_SEND_FILE)
-                #if (OPENSSL_VERSION_NUMBER >= 0x30000000L) && defined(BIO_get_ktls_send)
-            AConnection->SendFileReply(FileName.c_str(), Mapping::ExtToType(sFileExt.c_str()));
-  #else
-            if (AConnection->IOHandler()->UsedSSL()) {
-                if (Reply.Content.IsEmpty()) {
-                    Reply.Content.LoadFromFile(FileName.c_str());
-                }
-
-                AConnection->SendReply(CHTTPReply::ok, Mapping::ExtToType(sFileExt.c_str()), true);
-            } else {
+    #if (OPENSSL_VERSION_NUMBER >= 0x30000000L) && defined(BIO_get_ktls_send)
                 AConnection->SendFileReply(FileName.c_str(), Mapping::ExtToType(sFileExt.c_str()));
-            }
-  #endif
+    #else
+                if (AConnection->IOHandler()->UsedSSL()) {
+                    if (Reply.Content.IsEmpty()) {
+                        Reply.Content.LoadFromFile(FileName.c_str());
+                    }
+
+                    AConnection->SendReply(CHTTPReply::ok, Mapping::ExtToType(sFileExt.c_str()), true);
+                } else {
+                    AConnection->SendFileReply(FileName.c_str(), Mapping::ExtToType(sFileExt.c_str()));
+                }
+    #endif
 #else
                 if (Reply.Content.IsEmpty()) {
                     Reply.Content.LoadFromFile(FileName.c_str());
@@ -354,51 +366,58 @@ namespace Apostol {
 
             auto pConnection = AHandler->Connection();
 
-            if (code == CURLE_OK) {
-                const auto http_code = curl.GetResponseCode();
-                CHTTPReply Reply;
+            CConnectionLockGuard Lock(pConnection);
 
-                Reply.Headers.Clear();
-                for (int i = 1; i < curl.Headers().Count(); i++) {
-                    const auto &Header = curl.Headers()[i];
-                    Reply.AddHeader(Header.Name(), Header.Value());
-                }
+            try {
+                if (code == CURLE_OK) {
+                    const auto http_code = curl.GetResponseCode();
+                    CHTTPReply Reply;
 
-                Reply.StatusString = http_code;
-                Reply.StatusText = Reply.StatusString;
+                    Reply.Headers.Clear();
+                    for (int i = 1; i < curl.Headers().Count(); i++) {
+                        const auto &Header = curl.Headers()[i];
+                        Reply.AddHeader(Header.Name(), Header.Value());
+                    }
 
-                Reply.StringToStatus();
+                    Reply.StatusString = http_code;
+                    Reply.StatusText = Reply.StatusString;
 
-                if (http_code == 200) {
-                    DeleteFile(AHandler->AbsoluteName());
+                    Reply.StringToStatus();
 
-                    Reply.Content = curl.Result();
-                    Reply.ContentLength = Reply.Content.Length();
+                    if (http_code == 200) {
+                        DeleteFile(AHandler->AbsoluteName());
 
-                    Reply.DelHeader("Transfer-Encoding");
-                    Reply.DelHeader("Content-Encoding");
-                    Reply.DelHeader("Content-Length");
+                        Reply.Content = curl.Result();
+                        Reply.ContentLength = Reply.Content.Length();
 
-                    Reply.AddHeader("Content-Length", CString::ToString(Reply.ContentLength));
+                        Reply.DelHeader("Transfer-Encoding");
+                        Reply.DelHeader("Content-Encoding");
+                        Reply.DelHeader("Content-Length");
 
-                    Reply.Content.SaveToFile(AHandler->AbsoluteName().c_str());
+                        Reply.AddHeader("Content-Length", CString::ToString(Reply.ContentLength));
 
-                    SendFile(pConnection, AHandler->AbsoluteName());
+                        Reply.Content.SaveToFile(AHandler->AbsoluteName().c_str());
 
-                    DoDone(AHandler, Reply);
+                        SendFile(pConnection, AHandler->AbsoluteName());
+
+                        DoDone(AHandler, Reply);
+                    } else {
+                        const CString Message("Not found");
+                        ReplyError(pConnection, CHTTPReply::not_found, Message);
+
+                        DoFail(AHandler, Message);
+                    }
+
+                    DebugReply(Reply);
                 } else {
-                    const CString Message("Not found");
-                    ReplyError(pConnection, CHTTPReply::not_found, Message);
+                    const CString Message(CCurlApi::GetErrorMessage(code));
+                    ReplyError(pConnection, CHTTPReply::bad_request, Message);
 
                     DoFail(AHandler, Message);
                 }
-
-                DebugReply(Reply);
-            } else {
-                const CString Message(CCurlApi::GetErrorMessage(code));
-                ReplyError(pConnection, CHTTPReply::bad_request, Message);
-
-                DoFail(AHandler, Message);
+            } catch (Delphi::Exception::Exception &E) {
+                DoError(AHandler, E.Message());
+                DoFail(AHandler, E.Message());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
@@ -407,18 +426,15 @@ namespace Apostol {
 
             auto OnExecuted = [this](CPQPollQuery *APollQuery) {
                 auto pHandler = dynamic_cast<CFileHandler *> (APollQuery->Binding());
-                pHandler->Unlock();
                 DeleteHandler(pHandler);
             };
 
             auto OnException = [this](CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) {
                 auto pHandler = dynamic_cast<CFileHandler *> (APollQuery->Binding());
-                pHandler->Unlock();
                 DoError(pHandler, E.Message());
             };
 
             if (AHandler->Done().IsEmpty()) {
-                AHandler->Unlock();
                 DeleteHandler(AHandler);
                 return;
             }
@@ -453,18 +469,15 @@ namespace Apostol {
 
             auto OnExecuted = [this](CPQPollQuery *APollQuery) {
                 auto pHandler = dynamic_cast<CFileHandler *> (APollQuery->Binding());
-                pHandler->Unlock();
                 DeleteHandler(pHandler);
             };
 
             auto OnException = [this](CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) {
                 auto pHandler = dynamic_cast<CFileHandler *> (APollQuery->Binding());
-                pHandler->Unlock();
                 DoError(pHandler, E.Message());
             };
 
             if (AHandler->Fail().IsEmpty()) {
-                AHandler->Unlock();
                 DeleteHandler(AHandler);
                 return;
             }
@@ -500,8 +513,6 @@ namespace Apostol {
 
                     IncProgress();
                 }
-
-                AHandler->Locked();
 
                 pThread->FreeOnTerminate(true);
                 pThread->Resume();

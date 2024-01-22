@@ -71,6 +71,8 @@ namespace Apostol {
 
             CFileHandler(CQueueCollection *ACollection, const CString &Data, COnQueueHandlerEvent && Handler);
 
+            ~CFileHandler() override;
+
             const CJSON &Payload() const { return m_Payload; }
 
             const CString &Session() const { return m_Session; }
