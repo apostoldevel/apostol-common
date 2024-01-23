@@ -179,7 +179,7 @@ namespace Apostol {
 
             m_Headers.Add("Authorization");
 
-            m_Agent = CString().Format("%s (%s)", ModuleName.c_str(), GApplication->Title().c_str());
+            m_Agent = CString().Format("%s (%s)", GApplication->Title().c_str(), ModuleName.c_str());
             m_Host = CApostolModule::GetIPByHostName(CApostolModule::GetHostName());
 
             m_AuthDate = 0;
@@ -196,6 +196,7 @@ namespace Apostol {
                 if (pConnection != nullptr && pConnection->Connected()) {
                     OnSuccess(pConnection, APollQuery);
                 }
+                pHandler->Unlock();
                 DeleteHandler(pHandler);
             };
 
@@ -205,9 +206,11 @@ namespace Apostol {
                 if (pConnection != nullptr && pConnection->Connected()) {
                     OnFail(pConnection, E);
                 }
+                pHandler->Unlock();
                 DeleteHandler(pHandler);
             };
 
+            AHandler->Lock();
             return ExecSQL(SQL, AHandler, OnExecuted, OnException);
         }
         //--------------------------------------------------------------------------------------------------------------
@@ -344,14 +347,12 @@ namespace Apostol {
 
         void CFileCommon::DoError(CQueueHandler *AHandler, const CString &Message) {
             Log()->Error(APP_LOG_ERR, 0, FILE_SERVER_ERROR_MESSAGE, ModuleName().c_str(), Message.c_str());
+            AHandler->Unlock();
             DeleteHandler(AHandler);
         }
         //--------------------------------------------------------------------------------------------------------------
 
         void CFileCommon::CURL(CFileHandler *AHandler) {
-
-            if (AHandler == nullptr)
-                return;
 
             CCurlFetch curl;
             CURLcode code;
@@ -416,7 +417,7 @@ namespace Apostol {
                     DoFail(AHandler, Message);
                 }
             } catch (Delphi::Exception::Exception &E) {
-                DoError(AHandler, E.Message());
+                DoError(E);
                 DoFail(AHandler, E.Message());
             }
         }
@@ -426,6 +427,7 @@ namespace Apostol {
 
             auto OnExecuted = [this](CPQPollQuery *APollQuery) {
                 auto pHandler = dynamic_cast<CFileHandler *> (APollQuery->Binding());
+                pHandler->Unlock();
                 DeleteHandler(pHandler);
             };
 
@@ -435,6 +437,7 @@ namespace Apostol {
             };
 
             if (AHandler->Done().IsEmpty()) {
+                AHandler->Unlock();
                 DeleteHandler(AHandler);
                 return;
             }
@@ -469,6 +472,7 @@ namespace Apostol {
 
             auto OnExecuted = [this](CPQPollQuery *APollQuery) {
                 auto pHandler = dynamic_cast<CFileHandler *> (APollQuery->Binding());
+                pHandler->Unlock();
                 DeleteHandler(pHandler);
             };
 
@@ -478,6 +482,7 @@ namespace Apostol {
             };
 
             if (AHandler->Fail().IsEmpty()) {
+                AHandler->Unlock();
                 DeleteHandler(AHandler);
                 return;
             }
@@ -496,6 +501,9 @@ namespace Apostol {
                             ));
 
             try {
+                if (!AHandler->Locked())
+                    AHandler->Lock();
+
                 ExecSQL(SQL, AHandler, OnExecuted, OnException);
             } catch (Delphi::Exception::Exception &E) {
                 DoError(AHandler, E.Message());
@@ -508,8 +516,8 @@ namespace Apostol {
                 auto pThread = GetThread(dynamic_cast<CFileHandler *> (AHandler));
 
                 if (AHandler->Allow()) {
+                    AHandler->Lock();
                     AHandler->Allow(false);
-                    AHandler->UpdateTimeOut(Now());
 
                     IncProgress();
                 }
@@ -558,8 +566,10 @@ namespace Apostol {
                     auto pHandler = (CFileHandler *) queue->Item(i);
                     if (pHandler != nullptr) {
                         pHandler->Handler();
-                        if (m_Progress >= m_MaxQueue)
+                        if (m_Progress >= m_MaxQueue) {
+                            Log()->Warning("[%s] Queue is full!", ModuleName().c_str());
                             break;
+                        }
                     }
                 }
             }
