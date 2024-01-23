@@ -142,6 +142,10 @@ namespace Apostol {
 
             m_pThread = nullptr;
             m_pConnection = nullptr;
+
+            m_TimeOutInterval = 30 * 60 * 1000;
+
+            UpdateTimeOut(Now());
         }
         //--------------------------------------------------------------------------------------------------------------
 
@@ -196,7 +200,6 @@ namespace Apostol {
                 if (pConnection != nullptr && pConnection->Connected()) {
                     OnSuccess(pConnection, APollQuery);
                 }
-                pHandler->Unlock();
                 DeleteHandler(pHandler);
             };
 
@@ -206,7 +209,6 @@ namespace Apostol {
                 if (pConnection != nullptr && pConnection->Connected()) {
                     OnFail(pConnection, E);
                 }
-                pHandler->Unlock();
                 DeleteHandler(pHandler);
             };
 
@@ -321,25 +323,6 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        CJSON CFileCommon::ParamsToJson(const CStringList &Params) {
-            CJSON Json;
-            for (int i = 0; i < Params.Count(); i++) {
-                Json.Object().AddPair(Params.Names(i), Params.Values(i));
-            }
-            return Json;
-        }
-        //--------------------------------------------------------------------------------------------------------------
-
-        CJSON CFileCommon::HeadersToJson(const CHeaders &Headers) {
-            CJSON Json;
-            for (int i = 0; i < Headers.Count(); i++) {
-                const auto &caHeader = Headers[i];
-                Json.Object().AddPair(caHeader.Name(), caHeader.Value());
-            }
-            return Json;
-        }
-        //--------------------------------------------------------------------------------------------------------------
-
         void CFileCommon::DoError(const Delphi::Exception::Exception &E) {
             Log()->Error(APP_LOG_ERR, 0, FILE_SERVER_ERROR_MESSAGE, ModuleName().c_str(), E.what());
         }
@@ -347,8 +330,15 @@ namespace Apostol {
 
         void CFileCommon::DoError(CQueueHandler *AHandler, const CString &Message) {
             Log()->Error(APP_LOG_ERR, 0, FILE_SERVER_ERROR_MESSAGE, ModuleName().c_str(), Message.c_str());
-            AHandler->Unlock();
             DeleteHandler(AHandler);
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
+        void CFileCommon::DeleteHandler(CQueueHandler *AHandler) {
+            if (Assigned(AHandler)) {
+                AHandler->Unlock();
+                CQueueCollection::DeleteHandler(AHandler);
+            }
         }
         //--------------------------------------------------------------------------------------------------------------
 
@@ -367,7 +357,8 @@ namespace Apostol {
 
             auto pConnection = AHandler->Connection();
 
-            CConnectionLockGuard Lock(pConnection);
+            CLockGuard Lock(&GFileThreadLock);
+            CConnectionLockGuard ConnectionLock(pConnection);
 
             try {
                 if (code == CURLE_OK) {
@@ -427,7 +418,6 @@ namespace Apostol {
 
             auto OnExecuted = [this](CPQPollQuery *APollQuery) {
                 auto pHandler = dynamic_cast<CFileHandler *> (APollQuery->Binding());
-                pHandler->Unlock();
                 DeleteHandler(pHandler);
             };
 
@@ -437,7 +427,6 @@ namespace Apostol {
             };
 
             if (AHandler->Done().IsEmpty()) {
-                AHandler->Unlock();
                 DeleteHandler(AHandler);
                 return;
             }
@@ -461,6 +450,9 @@ namespace Apostol {
                             ));
 
             try {
+                if (!AHandler->Locked())
+                    AHandler->Lock();
+
                 ExecSQL(SQL, AHandler, OnExecuted, OnException);
             } catch (Delphi::Exception::Exception &E) {
                 DoError(AHandler, E.Message());
@@ -472,7 +464,6 @@ namespace Apostol {
 
             auto OnExecuted = [this](CPQPollQuery *APollQuery) {
                 auto pHandler = dynamic_cast<CFileHandler *> (APollQuery->Binding());
-                pHandler->Unlock();
                 DeleteHandler(pHandler);
             };
 
@@ -482,7 +473,6 @@ namespace Apostol {
             };
 
             if (AHandler->Fail().IsEmpty()) {
-                AHandler->Unlock();
                 DeleteHandler(AHandler);
                 return;
             }
@@ -511,6 +501,107 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
+        void CFileCommon::DoFetch(CQueueHandler *AHandler) {
+
+            auto OnRequest = [AHandler](CHTTPClient *Sender, CHTTPRequest &Request) {
+                auto pHandler = dynamic_cast<CFileHandler *> (AHandler);
+
+                if (Assigned(pHandler)) {
+                    CLocation URI(pHandler->URI());
+
+                    CHTTPRequest::Prepare(Request, "GET", URI.href().c_str());
+                }
+
+                DebugRequest(Request);
+            };
+            //----------------------------------------------------------------------------------------------------------
+
+            auto OnExecute = [this, AHandler](CTCPConnection *Sender) {
+                auto pConnection = dynamic_cast<CHTTPClientConnection *> (Sender);
+                auto &Reply = pConnection->Reply();
+
+                DebugReply(Reply);
+
+                auto pHandler = dynamic_cast<CFileHandler *> (AHandler);
+                if (Assigned(pHandler)) {
+                    auto pHandlerConnection = pHandler->Connection();
+
+                    if (Reply.Status == CHTTPReply::ok) {
+                        try {
+                            Reply.Content.SaveToFile(pHandler->AbsoluteName().c_str());
+                            SendFile(pHandlerConnection, pHandler->AbsoluteName());
+                        } catch (Delphi::Exception::Exception &E) {
+                            DoError(E);
+                        }
+
+                        DoDone(pHandler, Reply);
+                    } else {
+                        const CString Message("Not found");
+                        ReplyError(pHandlerConnection, CHTTPReply::not_found, Message);
+
+                        DoFail(pHandler, Message);
+                    }
+                }
+
+                return true;
+            };
+            //----------------------------------------------------------------------------------------------------------
+
+            auto OnException = [this, AHandler](CTCPConnection *Sender, const Delphi::Exception::Exception &E) {
+                auto pConnection = dynamic_cast<CHTTPClientConnection *> (Sender);
+                DebugReply(pConnection->Reply());
+
+                auto pHandler = dynamic_cast<CFileHandler *> (AHandler);
+                if (Assigned(pHandler)) {
+                    auto pHandlerConnection = pHandler->Connection();
+
+                    const CString Message("Not found");
+                    ReplyError(pHandlerConnection, CHTTPReply::not_found, Message);
+
+                    DoFail(pHandler, E.what());
+                }
+
+                DoError(E);
+            };
+            //----------------------------------------------------------------------------------------------------------
+
+            auto pHandler = dynamic_cast<CFileHandler *> (AHandler);
+
+            if (pHandler == nullptr)
+                return;
+
+            pHandler->Lock();
+            pHandler->Allow(false);
+            pHandler->TimeOut(0);
+            pHandler->UpdateTimeOut(Now());
+
+            const auto &caPayload = pHandler->Payload();
+
+            CLocation URI(pHandler->URI());
+
+            auto pClient = GetClient(URI.hostname, URI.port);
+#if defined(_GLIBCXX_RELEASE) && (_GLIBCXX_RELEASE >= 9)
+            pClient->OnConnected([this](auto &&Sender) { DoClientConnected(Sender); });
+            pClient->OnDisconnected([this](auto &&Sender) { DoClientDisconnected(Sender); });
+#else
+            pClient->OnConnected(std::bind(&CFileCommon::DoClientConnected, this, _1));
+            pClient->OnDisconnected(std::bind(&CFileCommon::DoClientDisconnected, this, _1));
+#endif
+
+            pClient->OnRequest(OnRequest);
+            pClient->OnExecute(OnExecute);
+            pClient->OnException(OnException);
+
+            try {
+                pClient->AutoFree(true);
+                pClient->Active(true);
+            } catch (std::exception &e) {
+                pHandler->Unlock();
+                DoFail(pHandler, e.what());
+            }
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
         void CFileCommon::DoLink(CQueueHandler *AHandler) {
             try {
                 auto pThread = GetThread(dynamic_cast<CFileHandler *> (AHandler));
@@ -526,14 +617,6 @@ namespace Apostol {
                 pThread->Resume();
             } catch (std::exception &e) {
                 DoError(AHandler, e.what());
-            }
-        }
-        //--------------------------------------------------------------------------------------------------------------
-
-        void CFileCommon::QueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) {
-            auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->Binding());
-            if (pConnection != nullptr && pConnection->Connected()) {
-                ReplyError(pConnection, CHTTPReply::internal_server_error, E.what());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
@@ -558,17 +641,62 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
+        void CFileCommon::DoClientConnected(CObject *Sender) {
+            auto pConnection = dynamic_cast<CHTTPClientConnection *>(Sender);
+            if (Assigned(pConnection)) {
+                auto pSocket = pConnection->Socket();
+                if (pSocket != nullptr) {
+                    auto pHandle = pSocket->Binding();
+                    if (pHandle != nullptr) {
+                        Log()->Notice(_T("[%s] [%s:%d] Client connected."), ModuleName().c_str(), pHandle->PeerIP(), pHandle->PeerPort());
+                    }
+                }
+            }
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
+        void CFileCommon::DoClientDisconnected(CObject *Sender) {
+            auto pConnection = dynamic_cast<CHTTPClientConnection *>(Sender);
+            if (Assigned(pConnection)) {
+                auto pSocket = pConnection->Socket();
+                if (pSocket != nullptr) {
+                    auto pHandle = pSocket->Binding();
+                    if (pHandle != nullptr) {
+                        Log()->Notice(_T("[%s] [%s:%d] Client disconnected."), ModuleName().c_str(), pHandle->PeerIP(), pHandle->PeerPort());
+                    }
+                } else {
+                    Log()->Notice(_T("[%s] Client disconnected."), ModuleName().c_str());
+                }
+            }
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
         void CFileCommon::UnloadQueue() {
             const auto index = m_Queue.IndexOf(this);
             if (index != -1) {
-                const auto queue = m_Queue[index];
-                for (int i = 0; i < queue->Count(); ++i) {
-                    auto pHandler = (CFileHandler *) queue->Item(i);
-                    if (pHandler != nullptr) {
+                const auto pQueue = m_Queue[index];
+                for (int i = 0; i < pQueue->Count(); ++i) {
+                    auto pHandler = (CFileHandler *) pQueue->Item(i);
+                    if (pHandler != nullptr && pHandler->Allow()) {
                         pHandler->Handler();
                         if (m_Progress >= m_MaxQueue) {
-                            Log()->Warning("[%s] Queue is full!", ModuleName().c_str());
                             break;
+                        }
+                    }
+                }
+            }
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
+        void CFileCommon::CheckTimeOut(CDateTime Now) {
+            const auto index = m_Queue.IndexOf(this);
+            if (index != -1) {
+                const auto pQueue = m_Queue[index];
+                for (int i = pQueue->Count() - 1; i >= 0; i--) {
+                    auto pHandler = (CFileHandler *) pQueue->Item(i);
+                    if (pHandler != nullptr && !pHandler->Allow()) {
+                        if ((pHandler->TimeOut() != INFINITE) && (Now >= pHandler->TimeOut())) {
+                            DoFail(pHandler, "Killed by timeout");
                         }
                     }
                 }
@@ -595,6 +723,7 @@ namespace Apostol {
 
         void CFileCommon::Initialization(CModuleProcess *AProcess) {
             m_Path = Config()->IniFile().ReadString(SectionName().c_str(), "path", "files/");
+            m_Type = Config()->IniFile().ReadString(SectionName().c_str(), "type", "native");
 
             if (!path_separator(m_Path.front())) {
                 m_Path = Config()->Prefix() + m_Path;

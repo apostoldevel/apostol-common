@@ -34,6 +34,8 @@ namespace Apostol {
 
     namespace Module {
 
+        static pthread_mutex_t GFileThreadLock;
+
         class CFileCommon;
         class CFileThread;
         class CFileThreadMgr;
@@ -215,12 +217,7 @@ namespace Apostol {
 
             void SignOut(const CString &Session);
 
-            static CJSON ParamsToJson(const CStringList &Params);
-            static CJSON HeadersToJson(const CHeaders &Headers);
-
             CFileThread *GetThread(CFileHandler *AHandler);
-
-            static void QueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E);
 
         protected:
 
@@ -228,10 +225,15 @@ namespace Apostol {
 
             CString m_Session;
             CString m_Path;
+            CString m_Type;
 
             void InitMethods() override {};
 
+            void CheckTimeOut(CDateTime Now);
+
             void Authentication();
+
+            void DeleteHandler(CQueueHandler *AHandler) override;
 
             CPQPollQuery *ExecuteSQL(const CStringList &SQL, CFileHandler *AHandler, COnApostolModuleSuccessEvent && OnSuccess, COnApostolModuleFailEvent && OnFail = nullptr);
 
@@ -241,10 +243,14 @@ namespace Apostol {
             void DoDone(CFileHandler *AHandler, const CHTTPReply &Reply);
             void DoFail(CFileHandler *AHandler, const CString &Message);
 
+            void DoFetch(CQueueHandler *AHandler);
             void DoLink(CQueueHandler *AHandler);
 
             void DoPostgresQueryExecuted(CPQPollQuery *APollQuery) override;
             void DoPostgresQueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) override;
+
+            void DoClientConnected(CObject *Sender);
+            void DoClientDisconnected(CObject *Sender);
 
         public:
 
