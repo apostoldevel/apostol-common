@@ -221,6 +221,8 @@ namespace Apostol {
 
         protected:
 
+            int m_TimeOut;
+
             CDateTime m_AuthDate;
 
             CString m_Session;

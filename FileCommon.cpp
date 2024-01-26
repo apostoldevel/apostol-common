@@ -573,6 +573,7 @@ namespace Apostol {
             pHandler->Lock();
             pHandler->Allow(false);
             pHandler->TimeOut(0);
+            pHandler->TimeOutInterval(m_TimeOut * 1000);
             pHandler->UpdateTimeOut(Now());
 
             const auto &caPayload = pHandler->Payload();
@@ -724,6 +725,7 @@ namespace Apostol {
         void CFileCommon::Initialization(CModuleProcess *AProcess) {
             m_Path = Config()->IniFile().ReadString(SectionName().c_str(), "path", "files/");
             m_Type = Config()->IniFile().ReadString(SectionName().c_str(), "type", "native");
+            m_TimeOut = Config()->IniFile().ReadInteger(SectionName().c_str(), "timeout", 5);
 
             if (!path_separator(m_Path.front())) {
                 m_Path = Config()->Prefix() + m_Path;
