@@ -211,7 +211,6 @@ namespace Apostol {
 
             CString m_Agent;
             CString m_Host;
-            CString m_Conf;
 
             CFileThreadMgrDefault m_ThreadMgr;
 
@@ -261,8 +260,6 @@ namespace Apostol {
             ~CFileCommon() override = default;
 
             void Initialization(CModuleProcess *AProcess) override;
-
-            CPQPollQuery *GetQuery(CPollConnection *AConnection) override;
 
             void UnloadQueue() override;
 
