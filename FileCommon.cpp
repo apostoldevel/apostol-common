@@ -28,6 +28,7 @@ Author:
 //----------------------------------------------------------------------------------------------------------------------
 
 #define API_BOT_USERNAME "apibot"
+#define PG_CONFIG_NAME "helper"
 
 #define QUERY_INDEX_AUTH     0
 #define QUERY_INDEX_DATA     1
@@ -186,6 +187,11 @@ namespace Apostol {
 
             m_TimeOut = 0;
             m_AuthDate = 0;
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
+        CPQPollQuery *CFileCommon::GetQuery(CPollConnection *AConnection, const CString &ConfName) {
+            return CApostolModule::GetQuery(AConnection, PG_CONFIG_NAME);
         }
         //--------------------------------------------------------------------------------------------------------------
 
@@ -573,8 +579,6 @@ namespace Apostol {
             pHandler->TimeOut(0);
             pHandler->TimeOutInterval(m_TimeOut * 1000);
             pHandler->UpdateTimeOut(Now());
-
-            const auto &caPayload = pHandler->Payload();
 
             CLocation URI(pHandler->URI());
 

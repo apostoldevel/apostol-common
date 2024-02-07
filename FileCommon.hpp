@@ -236,6 +236,7 @@ namespace Apostol {
 
             void DeleteHandler(CQueueHandler *AHandler) override;
 
+            CPQPollQuery *GetQuery(CPollConnection *AConnection, const CString &ConfName) override;
             CPQPollQuery *ExecuteSQL(const CStringList &SQL, CFileHandler *AHandler, COnApostolModuleSuccessEvent && OnSuccess, COnApostolModuleFailEvent && OnFail = nullptr);
 
             void DoError(const Delphi::Exception::Exception &E);
