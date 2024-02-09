@@ -437,7 +437,7 @@ namespace Apostol {
 
             const auto &caFileId = PQQuoteLiteral(AHandler->FileId());
             const auto &caAbsoluteName = PQQuoteLiteral(AHandler->AbsoluteName());
-            const auto &caHash = SHA256(Reply.Content, true);
+            const auto &caHash = SHA256(Reply.Content.IsEmpty() ? "" : Reply.Content, true);
             const auto &caContentType = PQQuoteLiteral(Reply.Headers["Content-Type"]);
 
             CStringList SQL;
