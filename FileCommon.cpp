@@ -699,7 +699,7 @@ namespace Apostol {
                     auto pHandler = (CFileHandler *) pQueue->Item(i);
                     if (pHandler != nullptr && !pHandler->Allow()) {
                         if ((pHandler->TimeOut() != INFINITE) && (Now >= pHandler->TimeOut())) {
-                            DoFail(pHandler, "Killed by timeout");
+                            DoFail(pHandler, CString().Format("[%s] Killed by timeout: %s", ModuleName().c_str(), pHandler->AbsoluteName().c_str()));
                         }
                     }
                 }
