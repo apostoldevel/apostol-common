@@ -34,11 +34,7 @@ namespace Apostol {
 
     namespace Module {
 
-        static pthread_mutex_t GFileThreadLock;
-
         class CFileCommon;
-        class CFileThread;
-        class CFileThreadMgr;
 
         //--------------------------------------------------------------------------------------------------------------
 
@@ -64,7 +60,6 @@ namespace Apostol {
             CString m_Fail;
             CString m_AbsoluteName;
 
-            CFileThread *m_pThread;
             CHTTPServerConnection *m_pConnection;
 
             void SetConnection(CHTTPServerConnection *AConnection);
@@ -97,106 +92,8 @@ namespace Apostol {
             CString &Fail() { return m_Fail; }
             const CString &Fail() const { return m_Fail; }
 
-            CFileThread *Thread() const { return m_pThread; };
-            void SetThread(CFileThread *AThread) { m_pThread = AThread; };
-
             CHTTPServerConnection *Connection() const { return m_pConnection; };
             void Connection(CHTTPServerConnection *AConnection) { SetConnection(AConnection); };
-
-        };
-
-        //--------------------------------------------------------------------------------------------------------------
-
-        //-- CFileThread -----------------------------------------------------------------------------------------------
-
-        //--------------------------------------------------------------------------------------------------------------
-
-        class CFileThread: public CThread, public CGlobalComponent {
-        private:
-
-            CFileCommon *m_pFile;
-
-        protected:
-
-            CFileHandler *m_pHandler;
-            CFileThreadMgr *m_pThreadMgr;
-
-        public:
-
-            explicit CFileThread(CFileCommon *AFile, CFileHandler *AHandler, CFileThreadMgr *AThreadMgr);
-
-            ~CFileThread() override;
-
-            void Execute() override;
-
-            void TerminateAndWaitFor();
-
-            CFileHandler *Handler() { return m_pHandler; };
-            void Handler(CFileHandler *Value) { m_pHandler = Value; };
-
-        };
-
-        //--------------------------------------------------------------------------------------------------------------
-
-        //-- CFileThreadMgr --------------------------------------------------------------------------------------------
-
-        //--------------------------------------------------------------------------------------------------------------
-
-        class CFileThreadMgr {
-        protected:
-
-            CThreadList m_ActiveThreads;
-            CThreadPriority m_ThreadPriority;
-
-        public:
-
-            CFileThreadMgr();
-
-            virtual ~CFileThreadMgr();
-
-            virtual CFileThread *GetThread(CFileCommon *APGFile, CFileHandler *AHandler);
-
-            virtual void ReleaseThread(CFileThread *AThread) abstract;
-
-            void TerminateThreads();
-
-            CThreadList &ActiveThreads() { return m_ActiveThreads; }
-            const CThreadList &ActiveThreads() const { return m_ActiveThreads; }
-
-            CThreadPriority ThreadPriority() const { return m_ThreadPriority; }
-            void ThreadPriority(CThreadPriority Value) { m_ThreadPriority = Value; }
-
-        }; // CFileThreadMgr
-
-        //--------------------------------------------------------------------------------------------------------------
-
-        //-- CFileThreadMgrDefault -------------------------------------------------------------------------------------
-
-        //--------------------------------------------------------------------------------------------------------------
-
-        class CFileThreadMgrDefault : public CFileThreadMgr {
-            typedef CFileThreadMgr inherited;
-
-        public:
-
-            ~CFileThreadMgrDefault() override {
-                TerminateThreads();
-            };
-
-            CFileThread *GetThread(CFileCommon *APGFile, CFileHandler *AHandler) override {
-                return inherited::GetThread(APGFile, AHandler);
-            };
-
-            void ReleaseThread(CFileThread *AThread) override {
-                if (!IsCurrentThread(AThread)) {
-                    AThread->FreeOnTerminate(false);
-                    AThread->TerminateAndWaitFor();
-                    FreeAndNil(AThread);
-                } else {
-                    AThread->FreeOnTerminate(true);
-                    AThread->Terminate();
-                }
-            };
 
         };
 
@@ -212,11 +109,9 @@ namespace Apostol {
             CString m_Agent;
             CString m_Host;
 
-            CFileThreadMgrDefault m_ThreadMgr;
+            CCURLClient m_Client;
 
             void SignOut(const CString &Session);
-
-            CFileThread *GetThread(CFileHandler *AHandler);
 
         protected:
 
@@ -245,14 +140,16 @@ namespace Apostol {
             void DoDone(CFileHandler *AHandler, const CHTTPReply &Reply);
             void DoFail(CFileHandler *AHandler, const CString &Message);
 
-            void DoFetch(CQueueHandler *AHandler);
-            void DoLink(CQueueHandler *AHandler);
+            void DoFetch(CFileHandler *AHandler);
+            void DoCURL(CFileHandler *AHandler);
 
             void DoPostgresQueryExecuted(CPQPollQuery *APollQuery) override;
             void DoPostgresQueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) override;
 
             void DoClientConnected(CObject *Sender);
             void DoClientDisconnected(CObject *Sender);
+
+            void DoCurlException(CCURLClient *Sender, const Delphi::Exception::Exception &E);
 
         public:
 
@@ -263,8 +160,6 @@ namespace Apostol {
             void Initialization(CModuleProcess *AProcess) override;
 
             void UnloadQueue() override;
-
-            void CURL(CFileHandler *AHandler);
 
             static void DeleteFile(const CString &FileName);
             static void SendFile(CHTTPServerConnection *AConnection, const CString &FileName);

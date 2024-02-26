@@ -44,84 +44,6 @@ namespace Apostol {
 
         //--------------------------------------------------------------------------------------------------------------
 
-        //-- CFileThread -----------------------------------------------------------------------------------------------
-
-        //--------------------------------------------------------------------------------------------------------------
-
-        CFileThread::CFileThread(CFileCommon *AFile, CFileHandler *AHandler, CFileThreadMgr *AThreadMgr):
-                CThread(true), CGlobalComponent() {
-
-            m_pFile = AFile;
-            m_pHandler = AHandler;
-            m_pThreadMgr = AThreadMgr;
-
-            if (Assigned(m_pHandler))
-                m_pHandler->SetThread(this);
-
-            if (Assigned(m_pThreadMgr))
-                m_pThreadMgr->ActiveThreads().Add(this);
-        }
-        //--------------------------------------------------------------------------------------------------------------
-
-        CFileThread::~CFileThread() {
-            if (Assigned(m_pHandler)) {
-                m_pHandler->SetThread(nullptr);
-                m_pHandler = nullptr;
-            }
-
-            if (Assigned(m_pThreadMgr))
-                m_pThreadMgr->ActiveThreads().Remove(this);
-
-            m_pThreadMgr = nullptr;
-        }
-        //--------------------------------------------------------------------------------------------------------------
-
-        void CFileThread::TerminateAndWaitFor() {
-            if (FreeOnTerminate())
-                throw Delphi::Exception::Exception(_T("Cannot call TerminateAndWaitFor on FreeAndTerminate threads."));
-
-            Terminate();
-            if (Suspended())
-                Resume();
-
-            WaitFor();
-        }
-        //--------------------------------------------------------------------------------------------------------------
-
-        void CFileThread::Execute() {
-            m_pFile->CURL(m_pHandler);
-        }
-
-        //--------------------------------------------------------------------------------------------------------------
-
-        //-- CFileThreadMgr --------------------------------------------------------------------------------------------
-
-        //--------------------------------------------------------------------------------------------------------------
-
-        CFileThreadMgr::CFileThreadMgr() {
-            m_ThreadPriority = tpNormal;
-        }
-        //--------------------------------------------------------------------------------------------------------------
-
-        CFileThreadMgr::~CFileThreadMgr() {
-            TerminateThreads();
-        }
-        //--------------------------------------------------------------------------------------------------------------
-
-        CFileThread *CFileThreadMgr::GetThread(CFileCommon *APGFile, CFileHandler *AHandler) {
-            return new CFileThread(APGFile, AHandler, this);
-        }
-        //--------------------------------------------------------------------------------------------------------------
-
-        void CFileThreadMgr::TerminateThreads() {
-            while (m_ActiveThreads.List().Count() > 0) {
-                auto pThread = static_cast<CFileThread *> (m_ActiveThreads.List().Last());
-                ReleaseThread(pThread);
-            }
-        }
-
-        //--------------------------------------------------------------------------------------------------------------
-
         //-- CFileHandler ----------------------------------------------------------------------------------------------
 
         //--------------------------------------------------------------------------------------------------------------
@@ -139,7 +61,6 @@ namespace Apostol {
             m_Name = m_Payload["name"].AsString();
             m_Hash = m_Payload["hash"].AsString();
 
-            m_pThread = nullptr;
             m_pConnection = nullptr;
 
             m_TimeOutInterval = 30 * 60 * 1000;
@@ -187,6 +108,13 @@ namespace Apostol {
 
             m_TimeOut = 0;
             m_AuthDate = 0;
+
+            m_Client.AllocateEventHandlers(Server());
+#if defined(_GLIBCXX_RELEASE) && (_GLIBCXX_RELEASE >= 9)
+            m_Client.OnException([this](auto &&Sender, auto &&E) { DoCurlException(Sender, E); });
+#else
+            m_Client.OnException(std::bind(&CFileCommon::DoCurlException, this, _1, _2));
+#endif
         }
         //--------------------------------------------------------------------------------------------------------------
 
@@ -216,7 +144,6 @@ namespace Apostol {
                 DeleteHandler(pHandler);
             };
 
-            AHandler->Lock();
             return ExecSQL(SQL, AHandler, OnExecuted, OnException);
         }
         //--------------------------------------------------------------------------------------------------------------
@@ -338,82 +265,180 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
+        void CFileCommon::DoCurlException(CCURLClient *Sender, const Delphi::Exception::Exception &E) {
+            DoError(E);
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
         void CFileCommon::DeleteHandler(CQueueHandler *AHandler) {
             if (Assigned(AHandler)) {
-                AHandler->Unlock();
                 CQueueCollection::DeleteHandler(AHandler);
             }
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        void CFileCommon::CURL(CFileHandler *AHandler) {
+        void CFileCommon::DoFetch(CFileHandler *AHandler) {
 
-            CCurlFetch curl;
-            CURLcode code;
+            auto OnRequest = [AHandler](CHTTPClient *Sender, CHTTPRequest &Request) {
+                if (Assigned(AHandler)) {
+                    CLocation URI(AHandler->URI());
 
-            int count = 0;
-            do {
-                code = curl.Get(AHandler->URI(), {});
-                if (code != CURLE_OK) {
-                    sleep(1);
+                    CHTTPRequest::Prepare(Request, "GET", URI.href().c_str());
                 }
-            } while (code != CURLE_OK && count++ < 3);
 
-            auto pConnection = AHandler->Connection();
+                DebugRequest(Request);
+            };
+            //----------------------------------------------------------------------------------------------------------
 
-            CLockGuard Lock(&GFileThreadLock);
-            CConnectionLockGuard ConnectionLock(pConnection);
+            auto OnExecute = [this, AHandler](CTCPConnection *Sender) {
+                auto pConnection = dynamic_cast<CHTTPClientConnection *> (Sender);
+                auto &Reply = pConnection->Reply();
 
-            try {
-                if (code == CURLE_OK) {
-                    const auto http_code = curl.GetResponseCode();
-                    CHTTPReply Reply;
+                DebugReply(Reply);
 
-                    Reply.Headers.Clear();
-                    for (int i = 1; i < curl.Headers().Count(); i++) {
-                        const auto &Header = curl.Headers()[i];
-                        Reply.AddHeader(Header.Name(), Header.Value());
-                    }
+                if (Assigned(AHandler)) {
+                    auto pHandlerConnection = AHandler->Connection();
 
-                    Reply.StatusString = http_code;
-                    Reply.StatusText = Reply.StatusString;
-
-                    Reply.StringToStatus();
-
-                    if (http_code == 200) {
-                        DeleteFile(AHandler->AbsoluteName());
-
-                        Reply.Content = curl.Result();
-                        Reply.ContentLength = Reply.Content.Length();
-
-                        Reply.DelHeader("Transfer-Encoding");
-                        Reply.DelHeader("Content-Encoding");
-                        Reply.DelHeader("Content-Length");
-
-                        Reply.AddHeader("Content-Length", CString::ToString(Reply.ContentLength));
-
-                        Reply.Content.SaveToFile(AHandler->AbsoluteName().c_str());
-
-                        SendFile(pConnection, AHandler->AbsoluteName());
+                    if (Reply.Status == CHTTPReply::ok) {
+                        try {
+                            Reply.Content.SaveToFile(AHandler->AbsoluteName().c_str());
+                            SendFile(pHandlerConnection, AHandler->AbsoluteName());
+                        } catch (Delphi::Exception::Exception &E) {
+                            DoError(E);
+                        }
 
                         DoDone(AHandler, Reply);
                     } else {
                         const CString Message("Not found");
-                        ReplyError(pConnection, CHTTPReply::not_found, Message);
+                        ReplyError(pHandlerConnection, CHTTPReply::not_found, Message);
 
                         DoFail(AHandler, Message);
                     }
+                }
 
-                    DebugReply(Reply);
+                return true;
+            };
+            //----------------------------------------------------------------------------------------------------------
+
+            auto OnException = [this, AHandler](CTCPConnection *Sender, const Delphi::Exception::Exception &E) {
+                auto pConnection = dynamic_cast<CHTTPClientConnection *> (Sender);
+                DebugReply(pConnection->Reply());
+
+                if (Assigned(AHandler)) {
+                    auto pHandlerConnection = AHandler->Connection();
+
+                    const CString Message("Not found");
+                    ReplyError(pHandlerConnection, CHTTPReply::not_found, Message);
+
+                    DoFail(AHandler, E.what());
+                }
+
+                DoError(E);
+            };
+            //----------------------------------------------------------------------------------------------------------
+
+            if (AHandler == nullptr)
+                return;
+
+            AHandler->Allow(false);
+
+            if (m_TimeOut > 0) {
+                AHandler->TimeOut(0);
+                AHandler->TimeOutInterval(m_TimeOut * 1000);
+                AHandler->UpdateTimeOut(Now());
+            }
+
+            CLocation URI(AHandler->URI());
+
+            auto pClient = GetClient(URI.hostname, URI.port);
+#if defined(_GLIBCXX_RELEASE) && (_GLIBCXX_RELEASE >= 9)
+            pClient->OnConnected([this](auto &&Sender) { DoClientConnected(Sender); });
+            pClient->OnDisconnected([this](auto &&Sender) { DoClientDisconnected(Sender); });
+#else
+            pClient->OnConnected(std::bind(&CFileCommon::DoClientConnected, this, _1));
+            pClient->OnDisconnected(std::bind(&CFileCommon::DoClientDisconnected, this, _1));
+#endif
+
+            pClient->OnRequest(OnRequest);
+            pClient->OnExecute(OnExecute);
+            pClient->OnException(OnException);
+
+            try {
+                pClient->AutoFree(true);
+                pClient->Active(true);
+            } catch (std::exception &e) {
+                DoFail(AHandler, e.what());
+            }
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
+        void CFileCommon::DoCURL(CFileHandler *AHandler) {
+
+            auto OnDone = [this, AHandler](CCurlFetch *Sender, CURLcode code, const CString &Error) {
+                const auto http_code = Sender->GetResponseCode();
+                CHTTPReply Reply;
+
+                Reply.Headers.Clear();
+                for (int i = 1; i < Sender->Headers().Count(); i++) {
+                    const auto &Header = Sender->Headers()[i];
+                    Reply.AddHeader(Header.Name(), Header.Value());
+                }
+
+                Reply.StatusString = http_code;
+                Reply.StatusText = Reply.StatusString;
+
+                Reply.StringToStatus();
+
+                auto pConnection = AHandler->Connection();
+
+                if (http_code == 200) {
+                    DeleteFile(AHandler->AbsoluteName());
+
+                    Reply.Content = Sender->Result();
+                    Reply.ContentLength = Reply.Content.Length();
+
+                    Reply.DelHeader("Transfer-Encoding");
+                    Reply.DelHeader("Content-Encoding");
+                    Reply.DelHeader("Content-Length");
+
+                    Reply.AddHeader("Content-Length", CString::ToString(Reply.ContentLength));
+
+                    Reply.Content.SaveToFile(AHandler->AbsoluteName().c_str());
+
+                    SendFile(pConnection, AHandler->AbsoluteName());
+
+                    DoDone(AHandler, Reply);
                 } else {
-                    const CString Message(CCurlApi::GetErrorMessage(code));
-                    ReplyError(pConnection, CHTTPReply::bad_request, Message);
+                    const CString Message("Not found");
+                    ReplyError(pConnection, CHTTPReply::not_found, Message);
 
                     DoFail(AHandler, Message);
                 }
-            } catch (Delphi::Exception::Exception &E) {
-                DoError(E);
-                DoFail(AHandler, E.Message());
+            };
+            //----------------------------------------------------------------------------------------------------------
+
+            auto OnFail = [this, AHandler](CCurlFetch *Sender, CURLcode code, const CString &Error) {
+                Log()->Warning("[%s] [CURL] %d (%s)", ModuleName().c_str(), (int) code, Error.c_str());
+                auto pConnection = AHandler->Connection();
+                ReplyError(pConnection, CHTTPReply::bad_request, Error);
+                DoFail(AHandler, Error);
+            };
+            //----------------------------------------------------------------------------------------------------------
+
+            CHeaders Headers;
+
+            AHandler->Allow(false);
+
+            if (m_TimeOut > 0) {
+                AHandler->TimeOut(0);
+                AHandler->TimeOutInterval((m_TimeOut + 10) * 1000);
+                AHandler->UpdateTimeOut(Now());
+            }
+
+            try {
+                m_Client.Get(AHandler->URI(), Headers, OnDone, OnFail);
+            } catch (std::exception &e) {
+                DoFail(AHandler, e.what());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
@@ -454,9 +479,6 @@ namespace Apostol {
                             ));
 
             try {
-                if (!AHandler->Locked())
-                    AHandler->Lock();
-
                 ExecSQL(SQL, AHandler, OnExecuted, OnException);
             } catch (Delphi::Exception::Exception &E) {
                 DoError(AHandler, E.Message());
@@ -495,131 +517,9 @@ namespace Apostol {
                             ));
 
             try {
-                if (!AHandler->Locked())
-                    AHandler->Lock();
-
                 ExecSQL(SQL, AHandler, OnExecuted, OnException);
             } catch (Delphi::Exception::Exception &E) {
                 DoError(AHandler, E.Message());
-            }
-        }
-        //--------------------------------------------------------------------------------------------------------------
-
-        void CFileCommon::DoFetch(CQueueHandler *AHandler) {
-
-            auto OnRequest = [AHandler](CHTTPClient *Sender, CHTTPRequest &Request) {
-                auto pHandler = dynamic_cast<CFileHandler *> (AHandler);
-
-                if (Assigned(pHandler)) {
-                    CLocation URI(pHandler->URI());
-
-                    CHTTPRequest::Prepare(Request, "GET", URI.href().c_str());
-                }
-
-                DebugRequest(Request);
-            };
-            //----------------------------------------------------------------------------------------------------------
-
-            auto OnExecute = [this, AHandler](CTCPConnection *Sender) {
-                auto pConnection = dynamic_cast<CHTTPClientConnection *> (Sender);
-                auto &Reply = pConnection->Reply();
-
-                DebugReply(Reply);
-
-                auto pHandler = dynamic_cast<CFileHandler *> (AHandler);
-                if (Assigned(pHandler)) {
-                    auto pHandlerConnection = pHandler->Connection();
-
-                    if (Reply.Status == CHTTPReply::ok) {
-                        try {
-                            Reply.Content.SaveToFile(pHandler->AbsoluteName().c_str());
-                            SendFile(pHandlerConnection, pHandler->AbsoluteName());
-                        } catch (Delphi::Exception::Exception &E) {
-                            DoError(E);
-                        }
-
-                        DoDone(pHandler, Reply);
-                    } else {
-                        const CString Message("Not found");
-                        ReplyError(pHandlerConnection, CHTTPReply::not_found, Message);
-
-                        DoFail(pHandler, Message);
-                    }
-                }
-
-                return true;
-            };
-            //----------------------------------------------------------------------------------------------------------
-
-            auto OnException = [this, AHandler](CTCPConnection *Sender, const Delphi::Exception::Exception &E) {
-                auto pConnection = dynamic_cast<CHTTPClientConnection *> (Sender);
-                DebugReply(pConnection->Reply());
-
-                auto pHandler = dynamic_cast<CFileHandler *> (AHandler);
-                if (Assigned(pHandler)) {
-                    auto pHandlerConnection = pHandler->Connection();
-
-                    const CString Message("Not found");
-                    ReplyError(pHandlerConnection, CHTTPReply::not_found, Message);
-
-                    DoFail(pHandler, E.what());
-                }
-
-                DoError(E);
-            };
-            //----------------------------------------------------------------------------------------------------------
-
-            auto pHandler = dynamic_cast<CFileHandler *> (AHandler);
-
-            if (pHandler == nullptr)
-                return;
-
-            pHandler->Lock();
-            pHandler->Allow(false);
-            pHandler->TimeOut(0);
-            pHandler->TimeOutInterval(m_TimeOut * 1000);
-            pHandler->UpdateTimeOut(Now());
-
-            CLocation URI(pHandler->URI());
-
-            auto pClient = GetClient(URI.hostname, URI.port);
-#if defined(_GLIBCXX_RELEASE) && (_GLIBCXX_RELEASE >= 9)
-            pClient->OnConnected([this](auto &&Sender) { DoClientConnected(Sender); });
-            pClient->OnDisconnected([this](auto &&Sender) { DoClientDisconnected(Sender); });
-#else
-            pClient->OnConnected(std::bind(&CFileCommon::DoClientConnected, this, _1));
-            pClient->OnDisconnected(std::bind(&CFileCommon::DoClientDisconnected, this, _1));
-#endif
-
-            pClient->OnRequest(OnRequest);
-            pClient->OnExecute(OnExecute);
-            pClient->OnException(OnException);
-
-            try {
-                pClient->AutoFree(true);
-                pClient->Active(true);
-            } catch (std::exception &e) {
-                pHandler->Unlock();
-                DoFail(pHandler, e.what());
-            }
-        }
-        //--------------------------------------------------------------------------------------------------------------
-
-        void CFileCommon::DoLink(CQueueHandler *AHandler) {
-            try {
-                auto pThread = GetThread(dynamic_cast<CFileHandler *> (AHandler));
-
-                if (AHandler->Allow()) {
-                    AHandler->Lock();
-                    AHandler->Allow(false);
-
-                    IncProgress();
-                }
-
-                pThread->FreeOnTerminate(true);
-                pThread->Resume();
-            } catch (std::exception &e) {
-                DoError(AHandler, e.what());
             }
         }
         //--------------------------------------------------------------------------------------------------------------
@@ -709,8 +609,10 @@ namespace Apostol {
 
         void CFileCommon::Initialization(CModuleProcess *AProcess) {
             m_Path = Config()->IniFile().ReadString(SectionName().c_str(), "path", "files/");
-            m_Type = Config()->IniFile().ReadString(SectionName().c_str(), "type", "native");
-            m_TimeOut = Config()->IniFile().ReadInteger(SectionName().c_str(), "timeout", 5);
+            m_Type = Config()->IniFile().ReadString(SectionName().c_str(), "type", "curl");
+            m_TimeOut = Config()->IniFile().ReadInteger(SectionName().c_str(), "timeout", 60);
+
+            m_Client.TimeOut(m_TimeOut);
 
             if (!path_separator(m_Path.front())) {
                 m_Path = Config()->Prefix() + m_Path;
@@ -721,11 +623,6 @@ namespace Apostol {
             }
 
             ForceDirectories(m_Path.c_str(), 0755);
-        }
-        //--------------------------------------------------------------------------------------------------------------
-
-        CFileThread *CFileCommon::GetThread(CFileHandler *AHandler) {
-            return m_ThreadMgr.GetThread(this, AHandler);
         }
         //--------------------------------------------------------------------------------------------------------------
 
