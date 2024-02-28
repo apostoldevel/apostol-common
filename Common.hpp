@@ -24,7 +24,10 @@ Author:
 #ifndef APOSTOL_COMMON_HPP
 #define APOSTOL_COMMON_HPP
 
+#ifndef APOSTOL_BACKEND_HPP
 #include "BackEnd.hpp"
+#endif
+
 #include "FetchCommon.hpp"
 #include "FileCommon.hpp"
 
