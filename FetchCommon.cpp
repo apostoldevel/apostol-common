@@ -363,9 +363,9 @@ namespace Apostol {
 
             const auto &caPayload = AHandler->Payload();
             const auto &caRequest = caPayload["id"].AsString();
-            const auto &caStream = caPayload["stream"].AsString();
+            const auto &caStream = caPayload["stream"];
 
-            if (caStream.IsEmpty())
+            if (caStream.IsNull())
                 return;
 
             CStringList SQL;
@@ -373,7 +373,7 @@ namespace Apostol {
             SQL.Add(CString()
                             .MaxFormatSize(256 + caRequest.Size() + Data.Size())
                             .Format("SELECT %s(%s::uuid, %s);",
-                                    caStream.c_str(),
+                                    caStream.AsString().c_str(),
                                     PQQuoteLiteral(caRequest).c_str(),
                                     PQQuoteLiteral(Data).c_str()
                             ));
