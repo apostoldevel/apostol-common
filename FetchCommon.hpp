@@ -90,6 +90,7 @@ namespace Apostol {
 
             void DoDone(CFetchHandler *AHandler, const CHTTPReply &Reply);
             void DoFail(CFetchHandler *AHandler, const CString &Message);
+            void DoStream(CFetchHandler *AHandler, const CString &Data);
 
             void DoPostgresQueryExecuted(CPQPollQuery *APollQuery) override;
             void DoPostgresQueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) override;

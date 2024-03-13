@@ -351,6 +351,42 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
+        void CFetchCommon::DoStream(CFetchHandler *AHandler, const CString &Data) {
+
+            auto OnExecuted = [](CPQPollQuery *APollQuery) {
+
+            };
+
+            auto OnException = [this](CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) {
+                DoError(E);
+            };
+
+            const auto &caPayload = AHandler->Payload();
+            const auto &caRequest = caPayload["id"].AsString();
+            const auto &caStream = caPayload["stream"].AsString();
+
+            if (caStream.IsEmpty())
+                return;
+
+            CStringList SQL;
+
+            SQL.Add(CString()
+                            .MaxFormatSize(256 + caRequest.Size() + Data.Size())
+                            .Format("SELECT %s(%s::uuid, %s);",
+                                    caStream.c_str(),
+                                    PQQuoteLiteral(caRequest).c_str(),
+                                    PQQuoteLiteral(Data).c_str()
+                            ));
+
+            try {
+                ExecSQL(SQL, nullptr, OnExecuted, OnException);
+            } catch (Delphi::Exception::Exception &E) {
+                DeleteHandler(AHandler);
+                DoError(E);
+            }
+        }
+        //--------------------------------------------------------------------------------------------------------------
+
         void CFetchCommon::UnloadQueue() {
             const auto index = m_Queue.IndexOf(this);
             if (index != -1) {
