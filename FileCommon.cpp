@@ -311,7 +311,10 @@ namespace Apostol {
                         DoDone(AHandler, Reply);
                     } else {
                         const CString Message("Not found");
-                        ReplyError(pHandlerConnection, CHTTPReply::not_found, Message);
+
+                        if (Server().IndexOfConnection(pHandlerConnection) != -1) {
+                            ReplyError(pHandlerConnection, CHTTPReply::not_found, Message);
+                        }
 
                         DoFail(AHandler, Message);
                     }
@@ -328,8 +331,10 @@ namespace Apostol {
                 if (Assigned(AHandler)) {
                     auto pHandlerConnection = AHandler->Connection();
 
-                    const CString Message("Not found");
-                    ReplyError(pHandlerConnection, CHTTPReply::not_found, Message);
+                    if (Server().IndexOfConnection(pConnection) != -1) {
+                        const CString Message("Not found");
+                        ReplyError(pHandlerConnection, CHTTPReply::not_found, Message);
+                    }
 
                     DoFail(AHandler, E.what());
                 }
@@ -411,7 +416,10 @@ namespace Apostol {
                     DoDone(AHandler, Reply);
                 } else {
                     const CString Message("Not found");
-                    ReplyError(pConnection, CHTTPReply::not_found, Message);
+
+                    if (Server().IndexOfConnection(pConnection) != -1) {
+                        ReplyError(pConnection, CHTTPReply::not_found, Message);
+                    }
 
                     DoFail(AHandler, Message);
                 }
@@ -421,7 +429,9 @@ namespace Apostol {
             auto OnFail = [this, AHandler](CCurlFetch *Sender, CURLcode code, const CString &Error) {
                 Log()->Warning("[%s] [CURL] %d (%s)", ModuleName().c_str(), (int) code, Error.c_str());
                 auto pConnection = AHandler->Connection();
-                ReplyError(pConnection, CHTTPReply::bad_request, Error);
+                if (Server().IndexOfConnection(pConnection) != -1) {
+                    ReplyError(pConnection, CHTTPReply::bad_request, Error);
+                }
                 DoFail(AHandler, Error);
             };
             //----------------------------------------------------------------------------------------------------------
