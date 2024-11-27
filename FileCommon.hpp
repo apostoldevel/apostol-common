@@ -134,7 +134,7 @@ namespace Apostol {
             CPQPollQuery *GetQuery(CPollConnection *AConnection, const CString &ConfName) override;
             CPQPollQuery *ExecuteSQL(const CStringList &SQL, CFileHandler *AHandler, COnApostolModuleSuccessEvent && OnSuccess, COnApostolModuleFailEvent && OnFail = nullptr);
 
-            void DoError(const Delphi::Exception::Exception &E);
+            void DoError(const Delphi::Exception::Exception &E) const;
             void DoError(CQueueHandler *AHandler, const CString &Message);
 
             void DoDone(CFileHandler *AHandler, const CHTTPReply &Reply);
@@ -146,10 +146,10 @@ namespace Apostol {
             void DoPostgresQueryExecuted(CPQPollQuery *APollQuery) override;
             void DoPostgresQueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) override;
 
-            void DoClientConnected(CObject *Sender);
-            void DoClientDisconnected(CObject *Sender);
+            void DoClientConnected(CObject *Sender) const;
+            void DoClientDisconnected(CObject *Sender) const;
 
-            void DoCurlException(CCURLClient *Sender, const Delphi::Exception::Exception &E);
+            void DoCurlException(CCURLClient *Sender, const Delphi::Exception::Exception &E) const;
 
         public:
 

@@ -68,7 +68,7 @@ namespace Apostol {
         //--------------------------------------------------------------------------------------------------------------
 
         void CFetchCommon::QueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) {
-            auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->Binding());
+            const auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->Binding());
             ReplyError(pConnection, CHTTPReply::internal_server_error, E.what());
         }
         //--------------------------------------------------------------------------------------------------------------
@@ -152,25 +152,25 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        void CFetchCommon::DoError(const Delphi::Exception::Exception &E) {
+        void CFetchCommon::DoError(const Delphi::Exception::Exception &E) const {
             Log()->Error(APP_LOG_ERR, 0, "[%s] Error: %s", ModuleName().c_str(), E.what());
         }
         //--------------------------------------------------------------------------------------------------------------
 
         void CFetchCommon::DeleteHandler(CQueueHandler *AHandler) {
-            auto pHandler = dynamic_cast<CFetchHandler *> (AHandler);
+            const auto pHandler = dynamic_cast<CFetchHandler *> (AHandler);
             if (Assigned(pHandler)) {
                 CQueueCollection::DeleteHandler(AHandler);
             }
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        void CFetchCommon::DoConnected(CObject *Sender) {
-            auto pConnection = dynamic_cast<CHTTPClientConnection *>(Sender);
+        void CFetchCommon::DoConnected(CObject *Sender) const {
+            const auto pConnection = dynamic_cast<CHTTPClientConnection *>(Sender);
             if (Assigned(pConnection)) {
-                auto pSocket = pConnection->Socket();
+                const auto pSocket = pConnection->Socket();
                 if (pSocket != nullptr) {
-                    auto pHandle = pSocket->Binding();
+                    const auto pHandle = pSocket->Binding();
                     if (pHandle != nullptr) {
                         Log()->Notice(_T("[%s] [%s:%d] Client connected."), ModuleName().c_str(), pHandle->PeerIP(), pHandle->PeerPort());
                     }
@@ -179,12 +179,12 @@ namespace Apostol {
         }
         //--------------------------------------------------------------------------------------------------------------
 
-        void CFetchCommon::DoDisconnected(CObject *Sender) {
-            auto pConnection = dynamic_cast<CHTTPClientConnection *>(Sender);
+        void CFetchCommon::DoDisconnected(CObject *Sender) const {
+            const auto pConnection = dynamic_cast<CHTTPClientConnection *>(Sender);
             if (Assigned(pConnection)) {
-                auto pSocket = pConnection->Socket();
+                const auto pSocket = pConnection->Socket();
                 if (pSocket != nullptr) {
-                    auto pHandle = pSocket->Binding();
+                    const auto pHandle = pSocket->Binding();
                     if (pHandle != nullptr) {
                         Log()->Notice(_T("[%s] [%s:%d] Client disconnected."), ModuleName().c_str(), pHandle->PeerIP(), pHandle->PeerPort());
                     }
@@ -197,17 +197,17 @@ namespace Apostol {
 
         void CFetchCommon::DoPostgresQueryExecuted(CPQPollQuery *APollQuery) {
 
-            auto pResult = APollQuery->Results(0);
+            const auto pResult = APollQuery->Results(0);
 
             try {
                 if (pResult->ExecStatus() != PGRES_TUPLES_OK)
                     throw Delphi::Exception::EDBError(pResult->GetErrorMessage());
 
-                CString errorMessage;
-
-                auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->Binding());
+                const auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->Binding());
 
                 if (pConnection != nullptr && !pConnection->ClosedGracefully()) {
+                    CString errorMessage;
+
                     const auto &caRequest = pConnection->Request();
                     auto &Reply = pConnection->Reply();
 
@@ -269,12 +269,12 @@ namespace Apostol {
         void CFetchCommon::DoDone(CFetchHandler *AHandler, const CHTTPReply &Reply) {
 
             auto OnExecuted = [this](CPQPollQuery *APollQuery) {
-                auto pHandler = dynamic_cast<CFetchHandler *> (APollQuery->Binding());
+                const auto pHandler = dynamic_cast<CFetchHandler *> (APollQuery->Binding());
                 DeleteHandler(pHandler);
             };
 
             auto OnException = [this](CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) {
-                auto pHandler = dynamic_cast<CFetchHandler *> (APollQuery->Binding());
+                const auto pHandler = dynamic_cast<CFetchHandler *> (APollQuery->Binding());
                 DeleteHandler(pHandler);
                 DoError(E);
             };
@@ -315,12 +315,12 @@ namespace Apostol {
         void CFetchCommon::DoFail(CFetchHandler *AHandler, const CString &Message) {
 
             auto OnExecuted = [this](CPQPollQuery *APollQuery) {
-                auto pHandler = dynamic_cast<CFetchHandler *> (APollQuery->Binding());
+                const auto pHandler = dynamic_cast<CFetchHandler *> (APollQuery->Binding());
                 DeleteHandler(pHandler);
             };
 
             auto OnException = [this](CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) {
-                auto pHandler = dynamic_cast<CFetchHandler *> (APollQuery->Binding());
+                const auto pHandler = dynamic_cast<CFetchHandler *> (APollQuery->Binding());
                 DeleteHandler(pHandler);
                 DoError(E);
             };
@@ -392,7 +392,7 @@ namespace Apostol {
             if (index != -1) {
                 const auto pQueue = m_Queue[index];
                 for (int i = 0; i < pQueue->Count(); ++i) {
-                    auto pHandler = (CFetchHandler *) pQueue->Item(i);
+                    const auto pHandler = static_cast<CFetchHandler *> (pQueue->Item(i));
                     if (pHandler != nullptr && pHandler->Allow()) {
                         pHandler->Handler();
                         if (m_Progress >= m_MaxQueue) {
@@ -410,7 +410,7 @@ namespace Apostol {
             if (index != -1) {
                 const auto pQueue = m_Queue[index];
                 for (int i = pQueue->Count() - 1; i >= 0; i--) {
-                    auto pHandler = (CFetchHandler *) pQueue->Item(i);
+                    const auto pHandler = static_cast<CFetchHandler *> (pQueue->Item(i));
                     if (pHandler != nullptr && !pHandler->Allow()) {
                         if ((pHandler->TimeOut() != INFINITE) && (Now >= pHandler->TimeOut())) {
                             DoFail(pHandler, "Connection timed out");

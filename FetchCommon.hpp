@@ -86,7 +86,7 @@ namespace Apostol {
 
             void DeleteHandler(CQueueHandler *AHandler) override;
 
-            void DoError(const Delphi::Exception::Exception &E);
+            void DoError(const Delphi::Exception::Exception &E) const;
 
             void DoDone(CFetchHandler *AHandler, const CHTTPReply &Reply);
             void DoFail(CFetchHandler *AHandler, const CString &Message);
@@ -95,8 +95,8 @@ namespace Apostol {
             void DoPostgresQueryExecuted(CPQPollQuery *APollQuery) override;
             void DoPostgresQueryException(CPQPollQuery *APollQuery, const Delphi::Exception::Exception &E) override;
 
-            void DoConnected(CObject *Sender);
-            void DoDisconnected(CObject *Sender);
+            void DoConnected(CObject *Sender) const;
+            void DoDisconnected(CObject *Sender) const;
 
         public:
 
