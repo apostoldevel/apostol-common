@@ -201,7 +201,7 @@ namespace Apostol {
 
             try {
                 if (pResult->ExecStatus() != PGRES_TUPLES_OK)
-                    throw Delphi::Exception::EDBError(pResult->GetErrorMessage());
+                    throw Delphi::Exception::EDBError("%s", pResult->GetErrorMessage());
 
                 const auto pConnection = dynamic_cast<CHTTPServerConnection *> (APollQuery->Binding());
 

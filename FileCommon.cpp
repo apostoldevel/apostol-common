@@ -531,7 +531,7 @@ namespace Apostol {
                 for (int i = 0; i < APollQuery->Count(); i++) {
                     const auto pResult = APollQuery->Results(i);
                     if (pResult->ExecStatus() != PGRES_TUPLES_OK)
-                        throw Delphi::Exception::EDBError(pResult->GetErrorMessage());
+                        throw Delphi::Exception::EDBError("%s", pResult->GetErrorMessage());
                 }
             } catch (Delphi::Exception::Exception &E) {
                 DoError(E);
