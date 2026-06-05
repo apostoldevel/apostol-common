@@ -100,7 +100,7 @@ namespace Apostol {
         //--------------------------------------------------------------------------------------------------------------
 
         CFileCommon::CFileCommon(CModuleProcess *AProcess, const CString &ModuleName, const CString &SectionName):
-                CQueueCollection(Config()->PostgresPollMin()), CApostolModule(AProcess, ModuleName, SectionName) {
+                CQueueCollection(Config()->PostgresPollMax()), CApostolModule(AProcess, ModuleName, SectionName) {
 
             m_Headers.Add("Authorization");
 
